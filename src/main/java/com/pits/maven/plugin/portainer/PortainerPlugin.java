@@ -6,11 +6,14 @@ import com.pits.maven.plugin.data.docker.dto.RestartPolicy;
 import com.pits.maven.plugin.data.portainer.ApiClient;
 import com.pits.maven.plugin.data.portainer.ApiException;
 import com.pits.maven.plugin.data.portainer.controller.AuthApi;
+import com.pits.maven.plugin.data.portainer.controller.ContainerApi;
 import com.pits.maven.plugin.data.portainer.controller.EndpointsApi;
 import com.pits.maven.plugin.data.portainer.dto.AuthenticateUserRequest;
 import com.pits.maven.plugin.data.portainer.dto.AuthenticateUserResponse;
+import com.pits.maven.plugin.data.portainer.dto.ContainerSummary;
 import com.pits.maven.plugin.data.portainer.dto.EndpointSubset;
 import com.pits.maven.plugin.portainer.api.PortainerDockerApi;
+import java.io.IOException;
 import java.net.URL;
 import java.util.List;
 import java.util.Optional;
@@ -23,6 +26,8 @@ import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
+import retrofit2.Call;
+import retrofit2.Response;
 import retrofit2.Retrofit;
 import retrofit2.converter.gson.GsonConverterFactory;
 
@@ -96,15 +101,19 @@ public class PortainerPlugin extends AbstractMojo {
     getLog().info("Determine endpoint");
     Integer endPointId = determineEndPoint();
 
+    getLog().info("Remove old container");
+    removeOldContainer(apiToken, endPointId);
+
     getLog().info("PitS Portainer Plugin Finished");
   }
 
   private void initPortainerApi() {
-    HttpLoggingInterceptor loggingInterceptor = new HttpLoggingInterceptor();
-    loggingInterceptor.setLevel(Level.BODY);
     OkHttpClient.Builder builder = new OkHttpClient.Builder();
-    builder.addInterceptor(loggingInterceptor);
-
+    if (getLog().isDebugEnabled()) {
+      HttpLoggingInterceptor loggingInterceptor = new HttpLoggingInterceptor();
+      loggingInterceptor.setLevel(Level.BODY);
+      builder.addInterceptor(loggingInterceptor);
+    }
     portainerApiClient = new ApiClient(builder.build());
     portainerApiClient.setBasePath(portainerApiUrl.toString().substring(0, portainerApiUrl.toString().length() - 1));
     portainerApiClient.setUserAgent("");
@@ -158,6 +167,29 @@ public class PortainerPlugin extends AbstractMojo {
       return endpointSubsetOptional.orElseThrow(() -> new MojoFailureException("Can't found endpoint by name:" + portainerEndPointName)).getId();
     } catch (ApiException error) {
       throw new MojoFailureException("Error while determine endPoint inside Portainer", error);
+    }
+  }
+
+  private void removeOldContainer(String apiToken, Integer endpointId) throws MojoFailureException {
+    try {
+      ContainerApi containerApi = new ContainerApi(portainerApiClient);
+      String fillerByName = String.format("{\"name\": [\"%s\"]}", containerName);
+      List<ContainerSummary> foundedContainers = containerApi.endpointContainerList(endpointId, true, null, null, fillerByName);
+      if ((foundedContainers != null) && (foundedContainers.size() > 0)) {
+        for (ContainerSummary containerSummary : foundedContainers) {
+          getLog().info(String.format("Remove container with id='%s', name='%s' and image='%s'", containerSummary.getId(), containerSummary.getNames(),
+              containerSummary.getImage()));
+          Call<Void> callDeleteContainer = portainerDockerApi.removeContainer(endpointId, containerSummary.getId(), true, true, false, apiToken);
+          Response<Void> dockerResponse = callDeleteContainer.execute();
+          if (dockerResponse.code() != 204) {
+            throw new RuntimeException(String.format("Error while delete container '%s': %s", containerSummary.getId(), dockerResponse.message()));
+          }
+        }
+      } else {
+        getLog().info("There is not containers for remove");
+      }
+    } catch (ApiException | IOException error) {
+      throw new MojoFailureException("Error while remove old containers", error);
     }
   }
 }
