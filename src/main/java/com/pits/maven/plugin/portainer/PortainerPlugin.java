@@ -22,7 +22,7 @@ import retrofit2.converter.gson.GsonConverterFactory;
  * @version 1.0
  * @since 1.0.0
  */
-@Mojo(name = "portainer")
+@Mojo(name = "pits-portainer")
 public class PortainerPlugin extends AbstractMojo {
 
   @Parameter(property = "portainerApiUrl", required = true)
@@ -71,14 +71,13 @@ public class PortainerPlugin extends AbstractMojo {
 
   @Override
   public void execute() throws MojoExecutionException, MojoFailureException {
-    getLog().info( "PitS Portainer Plugin Start");
+    getLog().info("PitS Portainer Plugin Start");
 
     initDockerApi();
 
-    getLog().info(String.format("Deploy image '%s' to portainer '%s' with endpoint '%s'", portainerApiUrl, dockerImageName, portainerEndPointName));
+    getLog().info(String.format("Deploy image '%s' to portainer '%s' with endpoint '%s'", dockerImageName, portainerApiUrl, portainerEndPointName));
 
-
-    getLog().info( "PitS Portainer Plugin Finish");
+    getLog().info("PitS Portainer Plugin Finish");
   }
 
   private void initDockerApi() {
