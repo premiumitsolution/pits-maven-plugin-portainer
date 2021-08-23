@@ -5,6 +5,8 @@ import com.google.gson.GsonBuilder;
 import com.pits.maven.plugin.data.docker.dto.EndpointIPAMConfig;
 import com.pits.maven.plugin.data.docker.dto.EndpointSettings;
 import com.pits.maven.plugin.data.docker.dto.HostConfig;
+import com.pits.maven.plugin.data.docker.dto.Image;
+import com.pits.maven.plugin.data.docker.dto.ImageDeleteResponseItem;
 import com.pits.maven.plugin.data.docker.dto.NetworkingConfig;
 import com.pits.maven.plugin.data.docker.dto.PortBinding;
 import com.pits.maven.plugin.data.docker.dto.RestartPolicy;
@@ -88,7 +90,7 @@ public class PortainerPlugin extends AbstractMojo {
   private String publishedPorts;
 
   @Parameter(property = "removeOldImages", required = true)
-  private String removeOldImages;
+  private boolean removeOldImages;
 
   @Parameter(property = "restartPolicy", required = true)
   private RestartPolicy.NameEnum restartPolicyName;
@@ -133,6 +135,14 @@ public class PortainerPlugin extends AbstractMojo {
 
     getLog().info("Create new container with specified image");
     String containerId = createNewContainer(apiToken, endPointId);
+
+    getLog().info("Start new container with specified image");
+    startContainer(apiToken, endPointId, containerId);
+
+    if (removeOldImages) {
+      getLog().info("Remove old images");
+      removeOldImages(apiToken, endPointId);
+    }
 
     getLog().info("PitS Portainer Plugin Finished");
   }
@@ -377,6 +387,60 @@ public class PortainerPlugin extends AbstractMojo {
       hostConfig.binds(volumesList);
     } else {
       binds.addAll(volumesList);
+    }
+  }
+
+  private void startContainer(String apiToken, Integer endPointId, String containerId) throws MojoFailureException {
+    try {
+      Call<Void> callCreate = portainerDockerApi.startContainer(endPointId, containerId, apiToken);
+      Response<Void> responseCreate = callCreate.execute();
+      if (responseCreate.code() != 204) {
+        throw new MojoFailureException("Error while start container:" + responseCreate.message());
+      }
+      getLog().info("Started new container with id=" + containerId);
+    } catch (IOException error) {
+      throw new MojoFailureException("Error while get team list", error);
+    }
+  }
+
+  private void removeOldImages(String apiToken, Integer endPointId) throws MojoFailureException {
+    try {
+      Call<List<Image>> imageListCall = portainerDockerApi.getImageList(endPointId, false, apiToken);
+      Response<List<Image>> imageListCallResponse = imageListCall.execute();
+      if (imageListCallResponse.code() == 200) {
+        List<Image> oldImages = imageListCallResponse.body().stream()
+            .filter(image -> image.getRepoTags() != null
+                && image.getRepoTags().stream().anyMatch(imageTagValue -> imageTagValue.contains(dockerImageName)))
+            .collect(Collectors.toList());
+
+        for (Image imageInfo : oldImages) {
+          Call<Image> imageInfoCall = portainerDockerApi.getImageInfo(endPointId, imageInfo.getId(), apiToken);
+          Response<Image> imageInfoCallResponse = imageInfoCall.execute();
+          if (imageInfoCallResponse.code() == 200) {
+            Image imageDetail = imageInfoCallResponse.body();
+            if ((imageDetail != null)
+                && (!imageDetail.getContainer().equals(""))
+                && (imageDetail.getRepoTags() != null)
+                && (imageDetail.getRepoTags().size() > 0)
+                && (!imageDetail.getRepoTags().get(0)
+                .contains(String.format("%s:%s", dockerImageName, dockerImageTag)))) {
+              //Remove container
+              getLog().info("Remove image with id=" + imageDetail.getId());
+              Call<List<ImageDeleteResponseItem>> removeImageCall = portainerDockerApi.removeImage(endPointId, imageDetail.getId(), apiToken);
+              Response<List<ImageDeleteResponseItem>> removeImageCallResponse = removeImageCall.execute();
+              if (removeImageCallResponse.code() != 200) {
+                throw new MojoFailureException("Error remove image:" + removeImageCallResponse.message());
+              }
+            }
+          } else {
+            throw new MojoFailureException("Error get image info:" + imageInfoCallResponse.message());
+          }
+        }
+      } else {
+        throw new MojoFailureException("Error while get images list:" + imageListCallResponse.message());
+      }
+    } catch (IOException error) {
+      throw new MojoFailureException("Error while get team list", error);
     }
   }
 
