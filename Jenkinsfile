@@ -27,22 +27,22 @@ pipeline {
       }
     }
 
-  }
-
-  stage('Deploy') {
-    when { expression { return env.BRANCH_NAME == 'develop'} }
-    steps {
-      withMaven( maven: 'Maven 3.8.1'){
-        sh '''
-          mvn deploy
-        '''
-      }
-    }
-  }
-
-    post {
-        always {
-            office365ConnectorSend webhookUrl: "$MS_TEAMS_HOOK_URL"
+    stage('Deploy') {
+      when { expression { return env.BRANCH_NAME == 'develop'} }
+      steps {
+        withMaven( maven: 'Maven 3.8.1'){
+          sh '''
+            mvn deploy
+          '''
         }
       }
+    }
+
+  }
+
+  post {
+      always {
+          office365ConnectorSend webhookUrl: "$MS_TEAMS_HOOK_URL"
+      }
+    }
 }
