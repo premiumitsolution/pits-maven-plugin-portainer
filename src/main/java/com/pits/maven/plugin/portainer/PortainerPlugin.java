@@ -2,6 +2,9 @@ package com.pits.maven.plugin.portainer;
 
 import com.pits.maven.plugin.data.docker.dto.RestartPolicy;
 import java.net.URL;
+import org.apache.maven.plugin.AbstractMojo;
+import org.apache.maven.plugin.MojoExecutionException;
+import org.apache.maven.plugin.MojoFailureException;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
 
@@ -11,7 +14,7 @@ import org.apache.maven.plugins.annotations.Parameter;
  * @since 1.0.0
  */
 @Mojo(name = "portainer")
-public class PortainerPlugin {
+public class PortainerPlugin extends AbstractMojo {
 
   @Parameter(property = "portainerApiUrl", required = true)
   private URL portainerApiUrl;
@@ -55,4 +58,10 @@ public class PortainerPlugin {
   @Parameter(property = "containerAccessSettingPublicAccess", required = true)
   private String[] containerAccessSettingPublicAccess;
 
+  @Override
+  public void execute() throws MojoExecutionException, MojoFailureException {
+    getLog().info( "PitS Portainer Plugin Start" );
+
+    getLog().info( "PitS Portainer Plugin Finish" );
+  }
 }

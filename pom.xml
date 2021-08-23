@@ -21,6 +21,17 @@
     <maven.plugin.version>3.6.1</maven.plugin.version>
   </properties>
 
+  <distributionManagement>
+    <repository>
+      <id>pits-release</id>
+      <url>https://repo.premiumitsolution.com/repository/pits-release</url>
+    </repository>
+    <snapshotRepository>
+      <id>pits-snapshot</id>
+      <url>https://repo.premiumitsolution.com/repository/pits-snapshot</url>
+    </snapshotRepository>
+  </distributionManagement>
+
   <dependencies>
     <dependency>
       <groupId>org.apache.maven</groupId>
@@ -228,12 +239,29 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-deploy-plugin</artifactId>
         <version>3.0.0-M1</version>
+        <configuration>
+          <skip>true</skip>
+        </configuration>
       </plugin>
 
       <plugin>
         <groupId>org.sonatype.plugins</groupId>
         <artifactId>nexus-staging-maven-plugin</artifactId>
         <version>1.6.8</version>
+        <executions>
+          <execution>
+            <id>default-deploy</id>
+            <phase>deploy</phase>
+            <goals>
+              <goal>deploy</goal>
+            </goals>
+          </execution>
+        </executions>
+        <configuration>
+          <serverId>${project.distributionManagement.snapshotRepository.id}</serverId>
+          <nexusUrl>${project.distributionManagement.snapshotRepository.url}</nexusUrl>
+          <skipStaging>true</skipStaging>
+        </configuration>
       </plugin>
 
     </plugins>
