@@ -3,6 +3,7 @@ package com.pits.maven.plugin.portainer;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.pits.maven.plugin.data.docker.dto.RestartPolicy;
+import com.pits.maven.plugin.data.portainer.ApiClient;
 import com.pits.maven.plugin.portainer.api.PortainerDockerApi;
 import java.net.URL;
 import java.util.concurrent.TimeUnit;
@@ -68,6 +69,7 @@ public class PortainerPlugin extends AbstractMojo {
   private String[] containerAccessSettingPublicAccess;
 
   private PortainerDockerApi portainerDockerApi;
+  private ApiClient portainerApiClient;
 
   @Override
   public void execute() throws MojoExecutionException, MojoFailureException {
@@ -78,6 +80,21 @@ public class PortainerPlugin extends AbstractMojo {
     getLog().info(String.format("Deploy image '%s' to portainer '%s' with endpoint '%s'", dockerImageName, portainerApiUrl, portainerEndPointName));
 
     getLog().info("PitS Portainer Plugin Finish");
+
+    getLog().info("Initialize portainerApi");
+    initPortainerApi();
+
+  }
+
+  private void initPortainerApi() {
+    HttpLoggingInterceptor loggingInterceptor = new HttpLoggingInterceptor();
+    loggingInterceptor.setLevel(Level.BODY);
+    OkHttpClient.Builder builder = new OkHttpClient.Builder();
+    builder.addInterceptor(loggingInterceptor);
+
+    portainerApiClient = new ApiClient(builder.build());
+    portainerApiClient.setBasePath(portainerApiUrl.toString().substring(0, portainerApiUrl.toString().length() - 1));
+    portainerApiClient.setUserAgent("");
   }
 
   private void initDockerApi() {
