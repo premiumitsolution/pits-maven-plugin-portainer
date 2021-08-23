@@ -1,12 +1,21 @@
 package com.pits.maven.plugin.portainer;
 
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.pits.maven.plugin.data.docker.dto.RestartPolicy;
+import com.pits.maven.plugin.portainer.api.PortainerDockerApi;
 import java.net.URL;
+import java.util.concurrent.TimeUnit;
+import okhttp3.OkHttpClient;
+import okhttp3.logging.HttpLoggingInterceptor;
+import okhttp3.logging.HttpLoggingInterceptor.Level;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
+import retrofit2.Retrofit;
+import retrofit2.converter.gson.GsonConverterFactory;
 
 /**
  * @author m.gromov
@@ -58,10 +67,41 @@ public class PortainerPlugin extends AbstractMojo {
   @Parameter(property = "containerAccessSettingPublicAccess", required = true)
   private String[] containerAccessSettingPublicAccess;
 
+  private PortainerDockerApi portainerDockerApi;
+
   @Override
   public void execute() throws MojoExecutionException, MojoFailureException {
-    getLog().info( "PitS Portainer Plugin Start" );
+    getLog().info( "PitS Portainer Plugin Start");
 
-    getLog().info( "PitS Portainer Plugin Finish" );
+    initDockerApi();
+
+    getLog().info(String.format("Deploy image '%s' to portainer '%s' with endpoint '%s'", portainerApiUrl, dockerImageName, portainerEndPointName));
+
+
+    getLog().info( "PitS Portainer Plugin Finish");
+  }
+
+  private void initDockerApi() {
+    getLog().info("Initialize initDockerApi");
+    Gson gson = new GsonBuilder()
+        .setLenient()
+        .setDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX")
+        .create();
+
+    HttpLoggingInterceptor loggingInterceptor = new HttpLoggingInterceptor();
+    loggingInterceptor.setLevel(Level.BODY);
+    OkHttpClient.Builder builder = new OkHttpClient.Builder();
+    builder.addInterceptor(loggingInterceptor);
+    builder.readTimeout(2, TimeUnit.MINUTES);
+    builder.writeTimeout(2, TimeUnit.MINUTES);
+    builder.hostnameVerifier((hostname, session) -> true);
+    OkHttpClient okHttpClient = builder.build();
+
+    Retrofit retrofit = new Retrofit.Builder()
+        .baseUrl(portainerApiUrl)
+        .addConverterFactory(GsonConverterFactory.create(gson))
+        .client(okHttpClient)
+        .build();
+    portainerDockerApi = retrofit.create(PortainerDockerApi.class);
   }
 }
