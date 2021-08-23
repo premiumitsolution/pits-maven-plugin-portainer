@@ -2,22 +2,42 @@ package com.pits.maven.plugin.portainer;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.pits.maven.plugin.data.docker.dto.EndpointIPAMConfig;
+import com.pits.maven.plugin.data.docker.dto.EndpointSettings;
+import com.pits.maven.plugin.data.docker.dto.HostConfig;
+import com.pits.maven.plugin.data.docker.dto.NetworkingConfig;
+import com.pits.maven.plugin.data.docker.dto.PortBinding;
 import com.pits.maven.plugin.data.docker.dto.RestartPolicy;
 import com.pits.maven.plugin.data.portainer.ApiClient;
 import com.pits.maven.plugin.data.portainer.ApiException;
 import com.pits.maven.plugin.data.portainer.controller.AuthApi;
 import com.pits.maven.plugin.data.portainer.controller.ContainerApi;
 import com.pits.maven.plugin.data.portainer.controller.EndpointsApi;
+import com.pits.maven.plugin.data.portainer.controller.ResourceControlsApi;
+import com.pits.maven.plugin.data.portainer.controller.TeamsApi;
 import com.pits.maven.plugin.data.portainer.dto.AuthenticateUserRequest;
 import com.pits.maven.plugin.data.portainer.dto.AuthenticateUserResponse;
 import com.pits.maven.plugin.data.portainer.dto.ContainerSummary;
 import com.pits.maven.plugin.data.portainer.dto.EndpointSubset;
+import com.pits.maven.plugin.data.portainer.dto.ResourceControlUpdateRequest;
+import com.pits.maven.plugin.data.portainer.dto.Team;
 import com.pits.maven.plugin.portainer.api.PortainerDockerApi;
+import com.pits.maven.plugin.portainer.data.dto.docker.ContainerCreatePortainerRequest;
+import com.pits.maven.plugin.portainer.data.dto.docker.ContainerCreatePortainerResponse;
 import java.io.IOException;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Base64;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.StringJoiner;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 import okhttp3.OkHttpClient;
 import okhttp3.logging.HttpLoggingInterceptor;
 import okhttp3.logging.HttpLoggingInterceptor.Level;
@@ -26,6 +46,7 @@ import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
+import org.jetbrains.annotations.NotNull;
 import retrofit2.Call;
 import retrofit2.Response;
 import retrofit2.Retrofit;
@@ -70,16 +91,19 @@ public class PortainerPlugin extends AbstractMojo {
   private String removeOldImages;
 
   @Parameter(property = "restartPolicy", required = true)
-  private RestartPolicy.NameEnum restartPolicy;
+  private RestartPolicy.NameEnum restartPolicyName;
 
   @Parameter(property = "containerAccessSettingTeams", required = true)
-  private String[] containerAccessSettingTeams;
+  private List<String> containerAccessSettingTeams;
 
   @Parameter(property = "containerAccessSettingAdministratorsOnly", required = true)
-  private String[] containerAccessSettingAdministratorsOnly;
+  private boolean containerAccessSettingAdministratorsOnly;
 
   @Parameter(property = "containerAccessSettingPublicAccess", required = true)
-  private String[] containerAccessSettingPublicAccess;
+  private boolean containerAccessSettingPublicAccess;
+
+  @Parameter(property = "volumes")
+  private Map<String, String> volumes;
 
   private PortainerDockerApi portainerDockerApi;
   private ApiClient portainerApiClient;
@@ -103,6 +127,12 @@ public class PortainerPlugin extends AbstractMojo {
 
     getLog().info("Remove old container");
     removeOldContainer(apiToken, endPointId);
+
+    getLog().info("Pull image container");
+    pullImage(apiToken, endPointId);
+
+    getLog().info("Create new container with specified image");
+    String containerId = createNewContainer(apiToken, endPointId);
 
     getLog().info("PitS Portainer Plugin Finished");
   }
@@ -192,4 +222,162 @@ public class PortainerPlugin extends AbstractMojo {
       throw new MojoFailureException("Error while remove old containers", error);
     }
   }
+
+  private void pullImage(String apiToken, Integer endPointId) throws MojoFailureException {
+    try {
+      String containerName = String.format("%s:%s", dockerImageName, dockerImageTag);
+      String registryAuth = String.format("{\n" + "  \"serveraddress\": \"%s\"" + "}", registryUrl);
+      registryAuth = Base64.getEncoder().encodeToString(registryAuth.getBytes(StandardCharsets.UTF_8));
+      Response<Void> createImageResponse = portainerDockerApi
+          .createImage(endPointId, containerName, registryAuth, apiToken)
+          .execute();
+      if (createImageResponse.code() != 200) {
+        throw new MojoFailureException("Error while pull container:" + createImageResponse.message());
+      }
+    } catch (IOException error) {
+      throw new MojoFailureException("Error while pull container:" + containerName, error);
+    }
+  }
+
+  private String createNewContainer(String apiToken, Integer endPointId) throws MojoFailureException {
+    try {
+      ContainerCreatePortainerRequest containerConfig = new ContainerCreatePortainerRequest();
+      containerConfig.image(String.format("%s:%s", dockerImageName, dockerImageTag));
+      containerConfig.openStdin(false);
+      containerConfig.tty(false);
+      containerConfig.volumes(createMapOfVolumes());
+
+      RestartPolicy restartPolicy = new RestartPolicy().name(restartPolicyName);
+
+      HostConfig hostConfig = new HostConfig()
+          .networkMode("bridge")
+          .restartPolicy(restartPolicy)
+          .publishAllPorts(false)
+          .autoRemove(false)
+          .privileged(false)
+          .init(false);
+
+      if (publishedPorts != null) {
+        String[] portArray = publishedPorts.split(",");
+        if (portArray.length > 0) {
+          Map<String, Object> exposedPorts = new HashMap<>();
+          Map<String, List<PortBinding>> hostPortBindings = new HashMap<>();
+          Arrays.stream(portArray).map(s -> s.split("/")).forEach(strings -> {
+            String protocol = strings[0].trim();
+            String containerPort = strings[1].trim();
+            String hostPort = strings[2].trim();
+
+            // Add exposed port
+            String exposeValue = String.format("%s/%s", containerPort, protocol);
+            exposedPorts.put(exposeValue, new Object());
+
+            // Add port binding
+            hostPortBindings.put(exposeValue, Collections.singletonList(new PortBinding().hostPort(hostPort)));
+          });
+          hostConfig.portBindings(hostPortBindings);
+          setupVolumeBinds(hostConfig);
+          containerConfig.setExposedPorts(exposedPorts);
+          containerConfig.setHostConfig(hostConfig);
+
+          Map<String, EndpointSettings> endpointSettingsMap = new HashMap<>();
+          endpointSettingsMap.put("bridge", new EndpointSettings().ipAMConfig(new EndpointIPAMConfig().ipv4Address("").ipv6Address("")));
+          NetworkingConfig networkingConfig = new NetworkingConfig().endpointsConfig(endpointSettingsMap);
+
+          containerConfig.setNetworkingConfig(networkingConfig);
+        }
+      }
+
+      Call<ContainerCreatePortainerResponse> callDeleteContainer = portainerDockerApi
+          .createContainer(endPointId, containerConfig, containerName, apiToken);
+      Response<ContainerCreatePortainerResponse> dockerResponse = callDeleteContainer.execute();
+      if ((dockerResponse.code() == 200) || (dockerResponse.code() == 201)) {
+        ContainerCreatePortainerResponse createResponse = dockerResponse.body();
+        StringJoiner sb = new StringJoiner("\n");
+        if (createResponse.getWarnings() != null) {
+          createResponse.getWarnings().forEach(sb::add);
+        }
+        getLog().info(String.format("Created new container with id='%s', resourceId='%s', warnings='%s'", createResponse.getId(),
+            createResponse.getPortainer().getResourceControl().getId(), sb));
+
+        //Установка прав доступа к созданному контейнеру
+        setupContainerSecurity(createResponse);
+
+        return createResponse.getId();
+      } else {
+        throw new MojoFailureException("Error while create container:" + dockerResponse.message());
+      }
+
+    } catch (IOException error) {
+      throw new MojoFailureException("Error while create new container", error);
+    }
+  }
+
+  /**
+   * Берем заданные пользователем volumes, берем из них директорию и создаем map где ключ - директория контейнера, а значение - null (так надо)
+   *
+   * @return
+   */
+  @NotNull
+  private Map<String, Object> createMapOfVolumes() {
+    Collection<String> volumeDirs = volumes.values();
+    Map<String, Object> resultVolumesMap = new HashMap<>();
+    for (String volumeDir : volumeDirs) {
+      resultVolumesMap.put(volumeDir, null);
+    }
+    return resultVolumesMap;
+  }
+
+  private void setupContainerSecurity(ContainerCreatePortainerResponse createResponse) throws MojoFailureException {
+    try {
+      Integer resourceControlId = createResponse.getPortainer().getResourceControl().getId();
+      List<Team> portainerTeamList = getPortainerTeamList();
+      Map<String, Integer> teamMap = portainerTeamList.stream().collect(Collectors.toMap(Team::getName, Team::getId));
+      ResourceControlsApi resourceControlsApi = new ResourceControlsApi(portainerApiClient);
+      ResourceControlUpdateRequest updateData = new ResourceControlUpdateRequest()
+          ._public(containerAccessSettingPublicAccess);
+      for (String teamCode : containerAccessSettingTeams) {
+        if (teamMap.containsKey(teamCode)) {
+          updateData.addTeamsItem(teamMap.get(teamCode));
+        } else {
+          throw new MojoFailureException("Can't found team by code:" + teamCode);
+        }
+      }
+      resourceControlsApi.resourceControlUpdate(resourceControlId, updateData);
+    } catch (ApiException error) {
+      throw new MojoFailureException("Error while setup container security", error);
+    }
+  }
+
+  private List<Team> getPortainerTeamList() throws MojoFailureException {
+    try {
+      TeamsApi teamsApi = new TeamsApi(portainerApiClient);
+      return teamsApi.teamList();
+    } catch (ApiException error) {
+      throw new MojoFailureException("Error while get team list", error);
+    }
+  }
+
+  /**
+   * Устанавливает заданные volumes в binds указанного host config-а
+   *
+   * @param hostConfig конфиг, в который необходимо установить значение
+   */
+  private void setupVolumeBinds(HostConfig hostConfig) {
+    if (volumes.isEmpty()) {
+      return;
+    }
+    List<String> volumesList = volumes
+        .entrySet()
+        .stream()
+        .map(entry -> String.format("%s:%s", entry.getKey(), entry.getValue()))
+        .collect(Collectors.toList());
+    final List<String> binds = hostConfig.getBinds();
+
+    if (binds == null) {
+      hostConfig.binds(volumesList);
+    } else {
+      binds.addAll(volumesList);
+    }
+  }
+
 }
