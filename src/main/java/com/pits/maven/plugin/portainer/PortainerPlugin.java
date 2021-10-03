@@ -21,9 +21,10 @@ import com.pits.maven.plugin.data.portainer.dto.AuthenticateUserRequest;
 import com.pits.maven.plugin.data.portainer.dto.AuthenticateUserResponse;
 import com.pits.maven.plugin.data.portainer.dto.ContainerSummary;
 import com.pits.maven.plugin.data.portainer.dto.EndpointSubset;
+import com.pits.maven.plugin.data.portainer.dto.RegistrySubset;
 import com.pits.maven.plugin.data.portainer.dto.ResourceControlUpdateRequest;
 import com.pits.maven.plugin.data.portainer.dto.Team;
-import com.pits.maven.plugin.portainer.api.PortainerDockerApi;
+import com.pits.maven.plugin.portainer.api.PortainerExtendedApi;
 import com.pits.maven.plugin.portainer.data.dto.docker.ContainerCreatePortainerRequest;
 import com.pits.maven.plugin.portainer.data.dto.docker.ContainerCreatePortainerResponse;
 import java.io.IOException;
@@ -107,7 +108,7 @@ public class PortainerPlugin extends AbstractMojo {
   @Parameter(property = "volumes")
   private Map<String, String> volumes;
 
-  private PortainerDockerApi portainerDockerApi;
+  private PortainerExtendedApi portainerExtendedApi;
   private ApiClient portainerApiClient;
 
   @Override
@@ -180,7 +181,7 @@ public class PortainerPlugin extends AbstractMojo {
         .addConverterFactory(GsonConverterFactory.create(gson))
         .client(okHttpClient)
         .build();
-    portainerDockerApi = retrofit.create(PortainerDockerApi.class);
+    portainerExtendedApi = retrofit.create(PortainerExtendedApi.class);
   }
 
   private String authenticate() throws MojoFailureException {
@@ -219,7 +220,7 @@ public class PortainerPlugin extends AbstractMojo {
         for (ContainerSummary containerSummary : foundedContainers) {
           getLog().info(String.format("Remove container with id='%s', name='%s' and image='%s'", containerSummary.getId(), containerSummary.getNames(),
               containerSummary.getImage()));
-          Call<Void> callDeleteContainer = portainerDockerApi.removeContainer(endpointId, containerSummary.getId(), true, true, false, apiToken);
+          Call<Void> callDeleteContainer = portainerExtendedApi.removeContainer(endpointId, containerSummary.getId(), true, true, false, apiToken);
           Response<Void> dockerResponse = callDeleteContainer.execute();
           if (dockerResponse.code() != 204) {
             throw new RuntimeException(String.format("Error while delete container '%s': %s", containerSummary.getId(), dockerResponse.message()));
@@ -235,14 +236,27 @@ public class PortainerPlugin extends AbstractMojo {
 
   private void pullImage(String apiToken, Integer endPointId) throws MojoFailureException {
     try {
-      String containerName = String.format("%s:%s", dockerImageName, dockerImageTag);
-      String registryAuth = String.format("{\n" + "  \"serveraddress\": \"%s\"" + "}", registryUrl);
-      registryAuth = Base64.getEncoder().encodeToString(registryAuth.getBytes(StandardCharsets.UTF_8));
-      Response<Void> createImageResponse = portainerDockerApi
-          .createImage(endPointId, containerName, registryAuth, apiToken)
-          .execute();
-      if (createImageResponse.code() != 200) {
-        throw new MojoFailureException("Error while pull container:" + createImageResponse.message());
+      Call<List<RegistrySubset>> registryCall = portainerExtendedApi.getEndpointRegistries(endPointId, apiToken);
+      Response<List<RegistrySubset>> registryCallResponse = registryCall.execute();
+      if (registryCallResponse.code() == 200) {
+        Optional<RegistrySubset> registryOptional = registryCallResponse.body().stream().peek(registrySubset -> {
+          getLog().info("Founded registry: " + registrySubset.getURL());
+        }).filter(registrySubset -> registrySubset.getURL().equals(registryUrl)).findFirst();
+        if (registryOptional.isPresent()) {
+          String containerName = String.format("%s:%s", dockerImageName, dockerImageTag);
+          String registryAuth = String.format("{\n" + "  \"registryId\": %s" + "}", registryOptional.get().getId());
+          registryAuth = Base64.getEncoder().encodeToString(registryAuth.getBytes(StandardCharsets.UTF_8));
+          Response<Void> createImageResponse = portainerExtendedApi
+              .createImage(endPointId, containerName, registryAuth, apiToken)
+              .execute();
+          if (createImageResponse.code() != 200) {
+            throw new MojoFailureException("Error while pull container:" + createImageResponse.message());
+          }
+        } else {
+          throw new MojoFailureException("Can't found registry by URL:" + registryUrl);
+        }
+      } else {
+        throw new MojoFailureException(String.format("Can't get registry list for endpoint '%s' : %s", endPointId, registryCallResponse.message()));
       }
     } catch (IOException error) {
       throw new MojoFailureException("Error while pull container:" + containerName, error);
@@ -297,7 +311,7 @@ public class PortainerPlugin extends AbstractMojo {
         }
       }
 
-      Call<ContainerCreatePortainerResponse> callDeleteContainer = portainerDockerApi
+      Call<ContainerCreatePortainerResponse> callDeleteContainer = portainerExtendedApi
           .createContainer(endPointId, containerConfig, containerName, apiToken);
       Response<ContainerCreatePortainerResponse> dockerResponse = callDeleteContainer.execute();
       if ((dockerResponse.code() == 200) || (dockerResponse.code() == 201)) {
@@ -392,7 +406,7 @@ public class PortainerPlugin extends AbstractMojo {
 
   private void startContainer(String apiToken, Integer endPointId, String containerId) throws MojoFailureException {
     try {
-      Call<Void> callCreate = portainerDockerApi.startContainer(endPointId, containerId, apiToken);
+      Call<Void> callCreate = portainerExtendedApi.startContainer(endPointId, containerId, apiToken);
       Response<Void> responseCreate = callCreate.execute();
       if (responseCreate.code() != 204) {
         throw new MojoFailureException("Error while start container:" + responseCreate.message());
@@ -405,7 +419,7 @@ public class PortainerPlugin extends AbstractMojo {
 
   private void removeOldImages(String apiToken, Integer endPointId) throws MojoFailureException {
     try {
-      Call<List<Image>> imageListCall = portainerDockerApi.getImageList(endPointId, false, apiToken);
+      Call<List<Image>> imageListCall = portainerExtendedApi.getImageList(endPointId, false, apiToken);
       Response<List<Image>> imageListCallResponse = imageListCall.execute();
       if (imageListCallResponse.code() == 200) {
         List<Image> oldImages = imageListCallResponse.body().stream()
@@ -414,7 +428,7 @@ public class PortainerPlugin extends AbstractMojo {
             .collect(Collectors.toList());
 
         for (Image imageInfo : oldImages) {
-          Call<Image> imageInfoCall = portainerDockerApi.getImageInfo(endPointId, imageInfo.getId(), apiToken);
+          Call<Image> imageInfoCall = portainerExtendedApi.getImageInfo(endPointId, imageInfo.getId(), apiToken);
           Response<Image> imageInfoCallResponse = imageInfoCall.execute();
           if (imageInfoCallResponse.code() == 200) {
             Image imageDetail = imageInfoCallResponse.body();
@@ -426,7 +440,7 @@ public class PortainerPlugin extends AbstractMojo {
                 .contains(String.format("%s:%s", dockerImageName, dockerImageTag)))) {
               //Remove container
               getLog().info("Remove image with id=" + imageDetail.getId());
-              Call<List<ImageDeleteResponseItem>> removeImageCall = portainerDockerApi.removeImage(endPointId, imageDetail.getId(), apiToken);
+              Call<List<ImageDeleteResponseItem>> removeImageCall = portainerExtendedApi.removeImage(endPointId, imageDetail.getId(), apiToken);
               Response<List<ImageDeleteResponseItem>> removeImageCallResponse = removeImageCall.execute();
               if (removeImageCallResponse.code() != 200) {
                 throw new MojoFailureException("Error remove image:" + removeImageCallResponse.message());
