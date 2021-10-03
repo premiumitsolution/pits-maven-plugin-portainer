@@ -2,12 +2,9 @@
 
 ## Version History
 
-### 1.0.1
-
-- Добавлена поддержка Portainer.io Версии 2.9
-
 ### 1.0.0
 
+- Добавлена поддержка Portainer.io Версии 2.9
 - Первая версия плагина 
 
 ## Enabling the plugin
